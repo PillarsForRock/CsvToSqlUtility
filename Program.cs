@@ -46,10 +46,13 @@ namespace CsvToSqlUtility
             string dbTablePrefix = ConfigurationManager.AppSettings["DbTablePrefix"];
             if ( string.IsNullOrWhiteSpace( dbTablePrefix ) ) dbTablePrefix = "_csv_";
 
+            Console.Write( $"Starting Import [{DateTime.Now.ToShortTimeString()}]" );
+
             // Process Files
             foreach ( var file in files )
             {
-                Console.WriteLine( string.Format( "Processing {0}...", file.Name ) );
+                Console.WriteLine(); 
+                Console.Write( string.Format( "Processing {0}...", file.Name ) );
 
                 // Read all the records
                 var records = GetRecords( file.FullName );
@@ -64,6 +67,10 @@ namespace CsvToSqlUtility
                 // Import records
                 InsertRecords( connectionString, tableName, fields, records );
             }
+
+            Console.WriteLine();
+            Console.Write( $"Finished Import [{DateTime.Now.ToShortTimeString()}]" );
+            Console.ReadLine();
         }
 
         private static List<dynamic> GetRecords( string filePath )
@@ -72,7 +79,9 @@ namespace CsvToSqlUtility
             {
                 using ( var s = File.OpenText( filePath ) )
                 {
-                    var reader = new CsvReader( s );
+                    var config = new CsvHelper.Configuration.Configuration();
+                    config.BadDataFound = null;
+                    var reader = new CsvReader( s, config );
                     reader.Configuration.HasHeaderRecord = true;
                     var records = reader.GetRecords<dynamic>().ToList();
                     return records;
@@ -210,10 +219,20 @@ namespace CsvToSqlUtility
             {
                 connection.Open();
 
+                int iRec = 0;
+                string msg = string.Empty;
+                int msgLen = 0;
+
+                var insertRows = new StringBuilder();
+                
                 foreach ( var record in records )
                 {
-                    var insertValues = new StringBuilder();
+                    if ( insertRows.Length > 0 )
+                    {
+                        insertRows.Append( "," + Environment.NewLine );
+                    }
 
+                    var insertFields = new StringBuilder();
                     foreach ( var p in record )
                     {
                         var fieldInfo = fields.FirstOrDefault( f => f.Name == p.Key );
@@ -221,7 +240,10 @@ namespace CsvToSqlUtility
                         {
                             string value = p.Value.ToString().Trim();
 
-                            insertValues.Append( insertValues.Length == 0 ? "( " : ", " );
+                            if ( insertFields.Length > 0 )
+                            {
+                                insertFields.Append( ", " );
+                            }
 
                             if ( fieldInfo.IsBool )
                             {
@@ -281,7 +303,11 @@ namespace CsvToSqlUtility
                                 }
                                 else
                                 {
-                                    if ( !decimal.TryParse( value, out decimal selected ) )
+                                    if ( decimal.TryParse( value, out decimal selected ) )
+                                    {
+                                        value = selected.ToString();
+                                    }
+                                    else
                                     {
                                         value = "NULL";
                                     }
@@ -296,13 +322,47 @@ namespace CsvToSqlUtility
                                 value = "'" + value.Replace( "'", "''" ) + "'";
                             }
 
-                            insertValues.Append( value );
+                            insertFields.Append( value );
                         }
                     }
 
-                    string insertStatement = insertPrefix.ToString() + insertValues.ToString() + " )" + Environment.NewLine;
+                    insertRows.AppendFormat( "( {0} )", insertFields.ToString() );
 
-                    using ( SqlCommand querySaveStaff = new SqlCommand( insertStatement, connection ) )
+                    iRec++;
+
+                    if ( iRec % 100 == 0 )
+                    {
+                        if ( msgLen > 0 )
+                        {
+                            var bs = new String( '\b', msgLen );
+                            Console.Write( bs );
+                        }
+
+                        msg = $"{iRec:N0} of {records.Count:N0}";
+                        msgLen = msg.Length;
+                        Console.Write( msg );
+
+                        using ( SqlCommand querySaveStaff = new SqlCommand( insertPrefix.ToString() + insertRows.ToString(), connection ) )
+                        {
+                            querySaveStaff.ExecuteNonQuery();
+                        }
+                        insertRows = new StringBuilder();
+                    }
+                }
+
+                if ( msgLen > 0 )
+                {
+                    var bs = new String( '\b', msgLen );
+                    Console.Write( bs );
+                }
+
+                msg = $"{iRec:N0} of {records.Count:N0}";
+                msgLen = msg.Length;
+                Console.Write( msg );
+
+                if ( insertRows.Length > 0 )
+                {
+                    using ( SqlCommand querySaveStaff = new SqlCommand( insertPrefix.ToString() + insertRows.ToString(), connection ) )
                     {
                         querySaveStaff.ExecuteNonQuery();
                     }
